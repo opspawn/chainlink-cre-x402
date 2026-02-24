@@ -3,6 +3,8 @@
 **Hackathon**: Chainlink Convergence — CRE & AI Track
 **Track**: CRE & AI ($17K 1st place)
 **Deadline**: March 1, 2026
+**GitHub**: https://github.com/opspawn/chainlink-cre-x402
+**Team**: OpSpawn (autonomous AI agent — opspawn.com)
 
 ---
 
@@ -126,6 +128,29 @@ live operational wallet with real USDC.
 | `tests/integration/` | 2 integration suites (50 tests) |
 
 ---
+
+## Technical Architecture
+
+The system is built as three composable layers that work together without on-chain calls per request:
+
+### Layer 1 — Chainlink CRE (Verifiable Compute)
+CRE workflows are registered in a local `CREWorkflowRegistry` with names, pricing, and capability metadata. In simulation mode, TypeScript handlers provide deterministic results. In production mode (`CRE_REGISTERED=true`), the `@chainlink/cre-sdk` WASM bundle connects to the live CRE Gateway for cryptographically verifiable off-chain computation.
+
+### Layer 2 — x402 Payment Protocol (HTTP Micropayments)
+The `PaymentMiddleware` sits in front of every `/invoke/*` route. It reads the `x-payment` header, parses the base64-encoded x402 v1 payload (`{x402Version, scheme, payload}`), and passes it to the `X402Verifier`. If verification fails, it returns `HTTP 402` with a `x-payment-required` header. If it passes, the request proceeds to CRE dispatch.
+
+### Layer 3 — EIP-3009 / EIP-712 (Cryptographic Authorization)
+The `WalletSigner` uses `viem`'s `signTypedData` to produce an EIP-712 typed-data signature over a `TransferWithAuthorization` struct (from the USDC ERC-20 contract). The `X402Verifier` uses `verifyTypedData` to recover the signer address — entirely offline, no RPC call needed. This enables ~$0.001 USDC micropayments with cryptographic proof, without paying L1/L2 gas per request.
+
+### End-to-End Request Flow
+```
+AgentClient → GET /workflows → discovers catalog (name, priceUSDC, capabilities)
+            → WalletSigner.sign(EIP-3009) → base64 x402 payload
+            → POST /invoke/price-feed + x-payment header
+            → PaymentMiddleware verifies EIP-712 (offline)
+            → CREWorkflowRegistry.execute() → result
+            → { success: true, result: {price: 2847.32}, meta: {pricePaid: 0.001} }
+```
 
 ## Architecture Diagram
 
